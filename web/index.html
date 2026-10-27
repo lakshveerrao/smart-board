@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Smart Board</title>
+<meta name="description" content="Open-source balance board controller: ESP32-C6 + MPU6050 that turns leaning into W/A/S/D over Bluetooth, and records labelled motion data.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one narrow reading column; the hero is a live tilt dial beside the pitch, stacking on phones. */
+:root {
+  --bg: #eef2f4;
+  --surface: #ffffff;
+  --fg: #14212b;
+  --muted: #5b6b77;
+  --line: #cfd8de;
+  --accent: #d9502f;
+  --ok: #1f8a5b;
+  --key: #e3e9ed;
+  --font-display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e161c; --surface: #16212a; --fg: #e3eaee; --muted: #93a3ae;
+    --line: #2a3943; --accent: #ff7a5c; --ok: #4cc38a; --key: #22303a; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e161c; --surface: #16212a; --fg: #e3eaee; --muted: #93a3ae;
+  --line: #2a3943; --accent: #ff7a5c; --ok: #4cc38a; --key: #22303a; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 16px/1.6 var(--font-body);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: max(24px, env(safe-area-inset-top, 0px)) max(40px, env(safe-area-inset-bottom, 0px));
+}
+.wrap { max-width: 1040px; margin: 0 auto; display: grid; gap: 72px; }
+a { color: var(--accent); text-underline-offset: 3px; }
+a:focus-visible, button:focus-visible, svg:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+h1, h2 { font-family: var(--font-display); text-wrap: balance; margin: 0; letter-spacing: -0.02em; }
+h2 { font-size: 1.9rem; line-height: 1.15; }
+p { margin: 0; }
+.label { font: 500 0.75rem/1 var(--font-mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+code, pre { font-family: var(--font-mono); font-size: 0.88rem; }
+
+/* top bar */
+.top { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; }
+.brand { font: 800 1.1rem/1 var(--font-display); letter-spacing: -0.01em; }
+.top nav { display: flex; gap: 20px; flex-wrap: wrap; }
+.top nav a { color: var(--fg); text-decoration: none; font-weight: 500; }
+.top nav a:hover { color: var(--accent); }
+
+/* hero */
+.hero { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr); gap: 48px; align-items: center; }
+.hero h1 { font-size: clamp(2.6rem, 6vw, 4.6rem); line-height: 0.98; font-weight: 800; }
+.hero h1 em { font-style: normal; color: var(--accent); }
+.pitch { display: grid; gap: 22px; min-width: 0; }
+.pitch > p { font-size: 1.15rem; color: var(--muted); max-width: 34rem; }
+.cta { display: flex; gap: 12px; flex-wrap: wrap; }
+.btn { display: inline-flex; align-items: center; gap: 8px; padding: 12px 20px; border-radius: 999px; font-weight: 600; text-decoration: none; border: 1.5px solid var(--fg); color: var(--fg); }
+.btn.primary { background: var(--fg); color: var(--bg); }
+.btn:hover { border-color: var(--accent); }
+.btn.primary:hover { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+/* tilt dial */
+.dial { display: grid; gap: 14px; justify-items: center; min-width: 0; }
+.dial svg { width: 100%; max-width: 380px; height: auto; touch-action: none; cursor: crosshair; }
+.ring-key { fill: none; stroke: var(--line); stroke-width: 1.5; }
+.ring-touch { fill: none; stroke: var(--accent); stroke-width: 2; stroke-dasharray: 6 6; }
+.zone-touch { fill: var(--accent); opacity: 0.08; }
+.axis { stroke: var(--line); stroke-width: 1; }
+.board { fill: var(--surface); stroke: var(--fg); stroke-width: 2; }
+.ring-label { font: 500 11px var(--font-mono); fill: var(--muted); }
+.dir { font: 600 13px var(--font-mono); fill: var(--muted); }
+.puck { fill: var(--fg); transition: fill 0.15s; }
+.puck.touch { fill: var(--accent); }
+.readout { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; justify-content: center; }
+.keys { display: grid; grid-template-columns: repeat(3, 40px); grid-template-rows: repeat(2, 40px); gap: 5px; }
+.keys span { display: grid; place-items: center; border-radius: 7px; background: var(--key); font: 600 15px var(--font-mono); color: var(--muted); border-bottom: 3px solid var(--line); transition: background 0.1s, color 0.1s; }
+.keys span.on { background: var(--ok); color: #fff; border-bottom-color: color-mix(in srgb, var(--ok) 60%, #000); }
+.keys .w { grid-column: 2; grid-row: 1; } .keys .a { grid-column: 1; grid-row: 2; }
+.keys .s { grid-column: 2; grid-row: 2; } .keys .d { grid-column: 3; grid-row: 2; }
+.serial { font: 13px/1.5 var(--font-mono); font-variant-numeric: tabular-nums; color: var(--muted); white-space: pre; }
+.serial b { font-weight: 500; color: var(--fg); }
+.serial .warn { color: var(--accent); }
+.hint { font-size: 0.85rem; color: var(--muted); text-align: center; }
+
+/* sections */
+section { display: grid; gap: 24px; }
+.intro { display: grid; gap: 10px; max-width: 40rem; }
+.intro p { color: var(--muted); }
+.modes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 32px; }
+.mode { display: grid; gap: 8px; align-content: start; border-top: 2px solid var(--fg); padding-top: 16px; }
+.mode h3 { margin: 0; font: 700 1.15rem/1.25 var(--font-display); }
+.mode p { color: var(--muted); font-size: 0.97rem; }
+.mode code { color: var(--fg); }
+
+.parts { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 32px; align-items: start; }
+table { border-collapse: collapse; width: 100%; font-size: 0.95rem; }
+th, td { text-align: left; padding: 10px 12px 10px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font: 500 0.72rem var(--font-mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+td.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tablebox { overflow-x: auto; }
+
+ol.steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 22px; counter-reset: step; max-width: 46rem; }
+ol.steps li { counter-increment: step; display: grid; grid-template-columns: 2.4rem minmax(0, 1fr); gap: 4px 14px; }
+ol.steps li::before { content: counter(step); grid-row: span 2; font: 700 1.5rem/1.2 var(--font-display); color: var(--accent); }
+ol.steps h3 { margin: 0; font: 600 1.05rem/1.4 var(--font-body); }
+ol.steps .body { display: grid; gap: 10px; min-width: 0; color: var(--muted); }
+pre { margin: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; overflow-x: auto; color: var(--fg); }
+.codebox { position: relative; min-width: 0; }
+.copy { position: absolute; top: 8px; right: 8px; font: 500 0.75rem var(--font-mono); padding: 5px 9px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--muted); cursor: pointer; }
+.copy:hover { color: var(--fg); }
+
+footer { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; color: var(--muted); font-size: 0.9rem; border-top: 1px solid var(--line); padding-top: 20px; }
+
+@media (max-width: 820px) {
+  .hero, .parts { grid-template-columns: minmax(0, 1fr); }
+  .modes { grid-template-columns: minmax(0, 1fr); gap: 24px; }
+  .wrap { gap: 56px; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <span class="brand">Smart Board</span>
+    <nav aria-label="Page">
+      <a href="#how">How it works</a>
+      <a href="#build">Build one</a>
+      <a href="https://github.com/lakshveerrao/smart-board">Source</a>
+    </nav>
+  </header>
+
+  <section class="hero" aria-labelledby="hero-title">
+    <div class="pitch">
+      <span class="label">ESP32-C6 · MPU6050 · Bluetooth LE · MIT</span>
+      <h1 id="hero-title">Lean to play.<br><em>Don't touch the floor.</em></h1>
+      <p>A balance board that pairs with your computer as a Bluetooth keyboard. Lean and it presses W, A, S or D. Let the edge hit the ground and the keys let go.</p>
+      <div class="cta">
+        <a class="btn primary" href="https://github.com/lakshveerrao/smart-board">Get the code on GitHub</a>
+        <a class="btn" href="#build">Build one</a>
+      </div>
+    </div>
+
+    <div class="dial">
+      <svg id="dial" viewBox="0 0 320 320" role="slider" tabindex="0"
+           aria-label="Board lean. Drag, or use the arrow keys." aria-valuetext="">
+        <circle class="zone-touch" cx="160" cy="160" r="150"/>
+        <circle cx="160" cy="160" r="105.6" fill="var(--bg)"/>
+        <circle class="board" cx="160" cy="160" r="105.6"/>
+        <line class="axis" x1="160" y1="20" x2="160" y2="300"/>
+        <line class="axis" x1="20" y1="160" x2="300" y2="160"/>
+        <circle class="ring-key" cx="160" cy="160" r="25.6"/>
+        <circle class="ring-touch" cx="160" cy="160" r="105.6"/>
+        <text class="ring-label" x="164" y="131">4°</text>
+        <text class="ring-label" x="164" y="51">16.5°</text>
+        <text class="dir" x="160" y="16" text-anchor="middle">W</text>
+        <text class="dir" x="160" y="314" text-anchor="middle">S</text>
+        <text class="dir" x="10" y="165" text-anchor="middle">A</text>
+        <text class="dir" x="310" y="165" text-anchor="middle">D</text>
+        <circle id="puck" class="puck" cx="160" cy="160" r="11"/>
+      </svg>
+      <div class="readout">
+        <div class="keys" aria-hidden="true">
+          <span class="w" id="kW">W</span><span class="a" id="kA">A</span>
+          <span class="s" id="kS">S</span><span class="d" id="kD">D</span>
+        </div>
+        <div class="serial" id="serial" aria-live="polite"></div>
+      </div>
+      <p class="hint">Drag the dot, or focus the dial and use the arrow keys. Same thresholds as the firmware.</p>
+    </div>
+  </section>
+
+  <section id="how" aria-labelledby="how-title">
+    <div class="intro">
+      <span class="label">How it works</span>
+      <h2 id="how-title">One sensor, three ways to use it</h2>
+      <p>An MPU6050 inside the board reads gravity 100 times a second. The firmware works out how far and which way you're leaning, relative to a calibration you do once.</p>
+    </div>
+    <div class="modes">
+      <div class="mode">
+        <span class="label">Firmware</span>
+        <h3>Game controller</h3>
+        <p>Shows up as a Bluetooth keyboard called <code>Smart Board</code>. Lean past 4° to press a key, ease back under 3° to release it. Diagonals press two keys.</p>
+      </div>
+      <div class="mode">
+        <span class="label">Firmware</span>
+        <h3>Ground-touch warnings</h3>
+        <p>Within 3° of the ground angle (about 19.5°) for 200 ms counts as a touch: keys release and you get a warning. The third touch locks the keys until you're centred, for 5 s at most. 20 s clean clears your warnings.</p>
+      </div>
+      <div class="mode">
+        <span class="label">Python tools</span>
+        <h3>Motion recorder</h3>
+        <p>The stream firmware sends <code>gx,gy,gz,ax,ay,az,timestamp</code> every 50 ms. A logger saves it to CSV, and a labelling app records takes like <code>touch_left</code> or <code>circle</code> for training a model.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="parts" aria-labelledby="parts-title">
+    <div class="parts">
+      <div class="intro">
+        <span class="label">Parts</span>
+        <h2 id="parts-title">What you need</h2>
+        <p>Any ESP32-C6 board works. MPU6500-type clones that report chip ID <code>0x70</code> instead of <code>0x68</code> are fine. If yours is wired differently, the included I2C scanner finds the pins.</p>
+      </div>
+      <div class="tablebox">
+        <table>
+          <thead><tr><th>Part</th><th>Connect</th></tr></thead>
+          <tbody>
+            <tr><td>ESP32-C6 board</td><td>USB to your computer for flashing</td></tr>
+            <tr><td>MPU6050 VCC</td><td class="mono">3.3 V</td></tr>
+            <tr><td>MPU6050 GND</td><td class="mono">GND</td></tr>
+            <tr><td>MPU6050 SDA</td><td class="mono">GPIO 17</td></tr>
+            <tr><td>MPU6050 SCL</td><td class="mono">GPIO 16</td></tr>
+            <tr><td>Balance board</td><td>Sensor mounted firmly, any orientation</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section id="build" aria-labelledby="build-title">
+    <div class="intro">
+      <span class="label">Build one</span>
+      <h2 id="build-title">Flash it in four steps</h2>
+    </div>
+    <ol class="steps">
+      <li>
+        <h3>Get the code and the ESP32 core</h3>
+        <div class="body">
+          <div class="codebox"><pre><code>git clone https://github.com/lakshveerrao/smart-board.git
+arduino-cli core install esp32:esp32</code></pre><button class="copy" type="button">Copy</button></div>
+        </div>
+      </li>
+      <li>
+        <h3>Set your pins</h3>
+        <div class="body">
+          <p>Put your SDA and SCL GPIOs into <code>I2C_SDA</code> and <code>I2C_SCL</code> at the top of <code>firmware/smart_board_controller/smart_board_controller.ino</code>. Not sure? Flash <code>firmware/i2c_scan</code> first and read the Serial Monitor at 115200.</p>
+        </div>
+      </li>
+      <li>
+        <h3>Compile and upload</h3>
+        <div class="body">
+          <div class="codebox"><pre><code>arduino-cli compile --fqbn esp32:esp32:esp32c6 firmware/smart_board_controller
+arduino-cli upload -p COM17 --fqbn esp32:esp32:esp32c6 firmware/smart_board_controller</code></pre><button class="copy" type="button">Copy</button></div>
+          <p>Use your board's own port in place of <code>COM17</code>.</p>
+        </div>
+      </li>
+      <li>
+        <h3>Pair and calibrate once</h3>
+        <div class="body">
+          <p>Pair <code>Smart Board</code> in your Bluetooth settings. Then hold BOOT for 2 s, step on within 4 s, stand level and still, and lean forward firmly until it says <code>Calibrated and saved. Play!</code></p>
+        </div>
+      </li>
+    </ol>
+  </section>
+
+  <footer>
+    <span>Smart Board is open source under the MIT license.</span>
+    <a href="https://github.com/lakshveerrao/smart-board">Source on GitHub</a>
+  </footer>
+</div>
+
+<script>
+(() => {
+  // Same numbers as board_logic.h
+  const KEY_ON = 4, KEY_OFF = 3, TOUCH = 19.5 - 3, MAX = 22, PX_PER_DEG = 6.4, C = 160;
+  const svg = document.getElementById('dial'), puck = document.getElementById('puck');
+  const serial = document.getElementById('serial');
+  const keyEl = {};
+  for (const k of 'WASD') keyEl[k] = document.getElementById('k' + k);
+  let fwd = 6, right = 2.5, keys = new Set(), touching = false;
+
+  function hyst(name, deg) {
+    if (deg >= KEY_ON) keys.add(name); else if (deg < KEY_OFF) keys.delete(name);
+  }
+  function render() {
+    let tilt = Math.hypot(fwd, right);
+    if (tilt > MAX) { fwd *= MAX / tilt; right *= MAX / tilt; tilt = MAX; }
+    touching = tilt >= TOUCH;
+    if (touching) keys.clear();
+    else { hyst('W', fwd); hyst('S', -fwd); hyst('D', right); hyst('A', -right); }
+    puck.setAttribute('cx', C + right * PX_PER_DEG);
+    puck.setAttribute('cy', C - fwd * PX_PER_DEG);
+    puck.classList.toggle('touch', touching);
+    const names = ['W', 'A', 'S', 'D'].filter(k => keys.has(k));
+    for (const k in keyEl) keyEl[k].classList.toggle('on', keys.has(k));
+    const f = (n, w) => n.toFixed(1).padStart(w);
+    serial.innerHTML =
+      `tilt <b>${f(tilt, 5)}</b>  fwd <b>${f(fwd, 6)}</b>\n` +
+      `keys <b>${(names.join('') || '-').padEnd(4)}</b>  right <b>${f(right, 6)}</b>\n` +
+      (touching ? '<span class="warn">GROUND TOUCH! keys released</span>' : 'PLAY');
+    svg.setAttribute('aria-valuetext',
+      `${tilt.toFixed(1)} degrees, ${touching ? 'touching the ground' : 'keys ' + (names.join(' ') || 'none')}`);
+  }
+  function fromPointer(e) {
+    const pt = svg.createSVGPoint(); pt.x = e.clientX; pt.y = e.clientY;
+    const p = pt.matrixTransform(svg.getScreenCTM().inverse());
+    right = (p.x - C) / PX_PER_DEG; fwd = (C - p.y) / PX_PER_DEG; render();
+  }
+  let dragging = false;
+  svg.addEventListener('pointerdown', e => { dragging = true; svg.setPointerCapture(e.pointerId); fromPointer(e); });
+  svg.addEventListener('pointermove', e => { if (dragging) fromPointer(e); });
+  svg.addEventListener('pointerup', () => { dragging = false; });
+  svg.addEventListener('pointercancel', () => { dragging = false; });
+  svg.addEventListener('keydown', e => {
+    const step = e.shiftKey ? 3 : 1, d = { ArrowUp: [step, 0], ArrowDown: [-step, 0], ArrowLeft: [0, -step], ArrowRight: [0, step] }[e.key];
+    if (e.key === 'Home') { fwd = 0; right = 0; render(); e.preventDefault(); return; }
+    if (!d) return;
+    fwd += d[0]; right += d[1]; render(); e.preventDefault();
+  });
+  render();
+
+  document.querySelectorAll('.copy').forEach(btn => btn.addEventListener('click', async () => {
+    const text = btn.previousElementSibling.innerText;
+    try { await navigator.clipboard.writeText(text); btn.textContent = 'Copied'; }
+    catch { const r = document.createRange(); r.selectNodeContents(btn.previousElementSibling); const s = getSelection(); s.removeAllRanges(); s.addRange(r); btn.textContent = 'Selected'; }
+    setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+  }));
+})();
+</script>
+</body>
+</html>

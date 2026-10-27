@@ -1,0 +1,9 @@
+build/
+*.bin
+*.elf
+*.map
+__pycache__/
+*.pyc
+*.csv
+.vercel
+.DS_Store
