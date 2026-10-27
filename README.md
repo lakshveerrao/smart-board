@@ -7,7 +7,7 @@ An **ESP32-C6** with an **MPU6050** (gyro + accelerometer) sits inside the board
 - **Data streaming:** sends `gx,gy,gz,ax,ay,az,timestamp` over BLE every 50 ms (Nordic UART Service).
 - **Labelling app:** record labelled motion (neutral, tilt left, touching right, circle...) into CSV for training a model.
 
-**Website:** https://smart-board-gamma.vercel.app
+**Website:** https://smartboardapp.vercel.app
 
 The ESP32-C6 has **no Classic Bluetooth**, so everything uses BLE (no `BluetoothSerial`).
 
